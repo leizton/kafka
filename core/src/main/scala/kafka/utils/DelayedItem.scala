@@ -25,6 +25,7 @@ import scala.math._
 
 class DelayedItem(delayMs: Long) extends Delayed with Logging {
 
+  //= 到期时间
   private val dueMs = Time.SYSTEM.milliseconds + delayMs
 
   def this(delay: Long, unit: TimeUnit) = this(unit.toMillis(delay))

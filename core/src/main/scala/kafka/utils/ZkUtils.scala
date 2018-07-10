@@ -757,6 +757,7 @@ class ZkUtils(val zkClient: ZkClient,
     ret
   }
 
+  //= 获取topics里每个topic都有哪些partition
   def getPartitionsForTopics(topics: Seq[String]): mutable.Map[String, Seq[Int]] = {
     getPartitionAssignmentForTopics(topics).map { topicAndPartitionMap =>
       val topic = topicAndPartitionMap._1
@@ -824,12 +825,15 @@ class ZkUtils(val zkClient: ZkClient,
   }
 
   @deprecated("This method has been deprecated and will be removed in a future release.", "0.11.0.0")
+  //= 指定group下有哪些consumer
   def getConsumersInGroup(group: String): Seq[String] = {
     val dirs = new ZKGroupDirs(group)
     getChildren(dirs.consumerRegistryDir)
   }
 
   @deprecated("This method has been deprecated and will be removed in a future release.", "0.11.0.0")
+  //= 获取指定group下每个consumerId和topic的对应关系
+  //= @return <topic, List[ConsumerThreadId]>
   def getConsumersPerTopic(group: String, excludeInternalTopics: Boolean): mutable.Map[String, List[ConsumerThreadId]] = {
     val dirs = new ZKGroupDirs(group)
     val consumers = getChildrenParentMayNotExist(dirs.consumerRegistryDir)
@@ -964,17 +968,17 @@ private object ZKStringSerializer extends ZkSerializer {
 
 @deprecated("This class has been deprecated and will be removed in a future release.", "0.11.0.0")
 class ZKGroupDirs(val group: String) {
-  def consumerDir = ZkUtils.ConsumersPath
-  def consumerGroupDir = consumerDir + "/" + group
-  def consumerRegistryDir = consumerGroupDir + "/ids"
-  def consumerGroupOffsetsDir = consumerGroupDir + "/offsets"
-  def consumerGroupOwnersDir = consumerGroupDir + "/owners"
+  def consumerDir = "/consumers"
+  def consumerGroupDir = s"/consumers/$group"
+  def consumerRegistryDir = s"/consumers/$group/ids"
+  def consumerGroupOffsetsDir = s"/consumers/$group/offsets"
+  def consumerGroupOwnersDir = s"/consumers/$group/owners"
 }
 
 @deprecated("This class has been deprecated and will be removed in a future release.", "0.11.0.0")
 class ZKGroupTopicDirs(group: String, topic: String) extends ZKGroupDirs(group) {
-  def consumerOffsetDir = consumerGroupOffsetsDir + "/" + topic
-  def consumerOwnerDir = consumerGroupOwnersDir + "/" + topic
+  def consumerOffsetDir = s"/consumers/$group/offsets/$topic"
+  def consumerOwnerDir = s"/consumers/$group/owners/$topic"
 }
 
 object ZKConfig {

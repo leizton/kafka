@@ -57,6 +57,7 @@ object ClientUtils extends Logging {
     // same broker
     val shuffledBrokers = Random.shuffle(brokers)
     while(i < shuffledBrokers.size && !fetchMetaDataSucceeded) {
+      //= producer的BlockingChannel的hostPort是shuffledBrokers(i)
       val producer: SyncProducer = ProducerPool.createSyncProducer(producerConfig, shuffledBrokers(i))
       info("Fetching metadata from broker %s with correlation id %d for %d topic(s) %s".format(shuffledBrokers(i), correlationId, topics.size, topics))
       try {
@@ -141,6 +142,7 @@ object ClientUtils extends Logging {
    /**
     * Returns the first end point from each broker with the PLAINTEXT security protocol.
     */
+  //= zk path: /brokers/ids
   def getPlaintextBrokerEndPoints(zkUtils: ZkUtils): Seq[BrokerEndPoint] = {
     zkUtils.getAllBrokersInCluster().map { broker =>
       broker.endPoints.collectFirst {

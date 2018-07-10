@@ -31,6 +31,7 @@ private[kafka] trait TopicCount {
 }
 
 @deprecated("This class has been deprecated and will be removed in a future release.", "0.11.0.0")
+//= consumer: consumerId
 case class ConsumerThreadId(consumer: String, threadId: Int) extends Ordered[ConsumerThreadId] {
   override def toString = "%s-%d".format(consumer, threadId)
 

@@ -34,6 +34,7 @@ case class TopicMetadataRequest(versionId: Short,
                                 correlationId: Int,
                                 clientId: String,
                                 topics: Seq[String])
+ //= requestId: ApiKeys.METADATA.id
  extends RequestOrResponse(Some(ApiKeys.METADATA.id)){
 
   def this(topics: Seq[String], correlationId: Int) =

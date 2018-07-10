@@ -22,6 +22,7 @@ import scala.collection._
 /**
  * The set of active brokers in the cluster
  */
+//= Cluster包含一个brokers的映射: <brokerId:Int, Broker>
 private[kafka] class Cluster {
   
   private val brokers = new mutable.HashMap[Int, Broker]

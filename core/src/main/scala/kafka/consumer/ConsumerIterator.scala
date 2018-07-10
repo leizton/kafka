@@ -55,10 +55,13 @@ class ConsumerIterator[K, V](private val channel: BlockingQueue[FetchedDataChunk
     item
   }
 
+  //= 从channel(BlockingQueue)里获取
   protected def makeNext(): MessageAndMetadata[K, V] = {
     var currentDataChunk: FetchedDataChunk = null
     // if we don't have an iterator, get one
     var localCurrent = current.get()
+
+    //= 从blockingQueue里获取
     if(localCurrent == null || !localCurrent.hasNext) {
       if (consumerTimeoutMs < 0)
         currentDataChunk = channel.take
@@ -70,22 +73,23 @@ class ConsumerIterator[K, V](private val channel: BlockingQueue[FetchedDataChunk
           throw new ConsumerTimeoutException
         }
       }
+
       if(currentDataChunk eq ZookeeperConsumerConnector.shutdownCommand) {
         debug("Received the shutdown command")
         return allDone
-      } else {
-        currentTopicInfo = currentDataChunk.topicInfo
-        val cdcFetchOffset = currentDataChunk.fetchOffset
-        val ctiConsumeOffset = currentTopicInfo.getConsumeOffset
-        if (ctiConsumeOffset < cdcFetchOffset) {
-          error("consumed offset: %d doesn't match fetch offset: %d for %s;\n Consumer may lose data"
-            .format(ctiConsumeOffset, cdcFetchOffset, currentTopicInfo))
-          currentTopicInfo.resetConsumeOffset(cdcFetchOffset)
-        }
-        localCurrent = currentDataChunk.messages.iterator
-
-        current.set(localCurrent)
       }
+
+      currentTopicInfo = currentDataChunk.topicInfo
+      val cdcFetchOffset = currentDataChunk.fetchOffset
+      val ctiConsumeOffset = currentTopicInfo.getConsumeOffset
+      if (ctiConsumeOffset < cdcFetchOffset) {
+        error("consumed offset: %d doesn't match fetch offset: %d for %s;\n Consumer may lose data"
+          .format(ctiConsumeOffset, cdcFetchOffset, currentTopicInfo))
+        currentTopicInfo.resetConsumeOffset(cdcFetchOffset)
+      }
+      localCurrent = currentDataChunk.messages.iterator
+      current.set(localCurrent)
+
       // if we just updated the current chunk and it is empty that means the fetch size is too small!
       if(currentDataChunk.messages.validBytes == 0)
         throw new MessageSizeTooLargeException("Found a message larger than the maximum fetch size of this consumer on topic " +
@@ -93,7 +97,8 @@ class ConsumerIterator[K, V](private val channel: BlockingQueue[FetchedDataChunk
                                                .format(currentDataChunk.topicInfo.topic, currentDataChunk.topicInfo.partitionId, currentDataChunk.fetchOffset))
     }
     var item = localCurrent.next()
-    // reject the messages that have already been consumed
+
+    //= 跳过已经consume的msg
     while (item.offset < currentTopicInfo.getConsumeOffset && localCurrent.hasNext) {
       item = localCurrent.next()
     }

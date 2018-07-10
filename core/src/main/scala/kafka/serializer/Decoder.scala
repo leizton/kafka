@@ -33,6 +33,7 @@ trait Decoder[T] {
 /**
  * The default implementation does nothing, just returns the same byte array it takes in.
  */
+//= byte[] to byte[]
 class DefaultDecoder(props: VerifiableProperties = null) extends Decoder[Array[Byte]] {
   def fromBytes(bytes: Array[Byte]): Array[Byte] = bytes
 }
@@ -41,6 +42,7 @@ class DefaultDecoder(props: VerifiableProperties = null) extends Decoder[Array[B
  * The string decoder translates bytes into strings. It uses UTF8 by default but takes
  * an optional property serializer.encoding to control this.
  */
+//= byte[] to utf8_string
 class StringDecoder(props: VerifiableProperties = null) extends Decoder[String] {
   val encoding =
     if(props == null)

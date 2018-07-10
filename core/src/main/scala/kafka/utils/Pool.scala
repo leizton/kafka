@@ -56,6 +56,7 @@ class Pool[K,V](valueFactory: Option[K => V] = None) extends Iterable[(K, V)] {
     * @param createValue Factory function.
     * @return The final value associated with the key.
     */
+  //= computeIfAbsent
   def getAndMaybePut(key: K, createValue: => V): V = {
     val current = pool.get(key)
     if (current == null) {

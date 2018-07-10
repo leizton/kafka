@@ -57,8 +57,6 @@ abstract class IteratorTemplate[T] extends Iterator[T] with java.util.Iterator[T
     }
   }
   
-  protected def makeNext(): T
-  
   def maybeComputeNext(): Boolean = {
     state = FAILED
     nextItem = makeNext()
@@ -69,6 +67,8 @@ abstract class IteratorTemplate[T] extends Iterator[T] with java.util.Iterator[T
       true
     }
   }
+
+  protected def makeNext(): T
   
   protected def allDone(): T = {
     state = DONE

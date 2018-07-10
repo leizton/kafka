@@ -34,6 +34,7 @@ import org.apache.kafka.common.requests.EpochEndOffset
 
 @deprecated("This class has been deprecated and will be removed in a future release. " +
             "Please use org.apache.kafka.clients.consumer.internals.Fetcher instead.", "0.11.0.0")
+//= -> SimpleConsumer
 class ConsumerFetcherThread(consumerIdString: String,
                             fetcherId: Int,
                             val config: ConsumerConfig,
@@ -110,7 +111,7 @@ class ConsumerFetcherThread(consumerIdString: String,
   }
 
   protected def buildFetchRequest(partitionMap: collection.Seq[(TopicPartition, PartitionFetchState)]): ResultWithPartitions[FetchRequest] = {
-    partitionMap.foreach { case ((topicPartition, partitionFetchState)) =>
+    partitionMap.foreach { case (topicPartition, partitionFetchState) =>
       if (partitionFetchState.isReadyForFetch)
         fetchRequestBuilder.addFetch(topicPartition.topic, topicPartition.partition, partitionFetchState.fetchOffset, fetchSize)
     }

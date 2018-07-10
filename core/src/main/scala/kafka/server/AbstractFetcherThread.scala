@@ -98,6 +98,8 @@ abstract class AbstractFetcherThread(name: String,
 
   override def doWork() {
     maybeTruncate()
+
+    //= build request
     val fetchRequest = inLock(partitionMapLock) {
       val ResultWithPartitions(fetchRequest, partitionsWithError) = buildFetchRequest(states)
       if (fetchRequest.isEmpty) {
@@ -107,6 +109,8 @@ abstract class AbstractFetcherThread(name: String,
       handlePartitionsWithErrors(partitionsWithError)
       fetchRequest
     }
+
+    //= do fetch
     if (!fetchRequest.isEmpty)
       processFetchRequest(fetchRequest)
   }
@@ -121,9 +125,10 @@ abstract class AbstractFetcherThread(name: String,
     *   occur during truncation.
     */
   def maybeTruncate(): Unit = {
+    //= ConsumerFetcherThread返回的epochRequests是Map(), partitionsWithError是Set()
     val ResultWithPartitions(epochRequests, partitionsWithError) = inLock(partitionMapLock) { buildLeaderEpochRequest(states) }
-    handlePartitionsWithErrors(partitionsWithError)
 
+    handlePartitionsWithErrors(partitionsWithError)
     if (epochRequests.nonEmpty) {
       val fetchedEpochs = fetchEpochsFromLeader(epochRequests)
       //Ensure we hold a lock during truncation.
@@ -180,6 +185,7 @@ abstract class AbstractFetcherThread(name: String,
 
                     fetcherLagStats.getAndMaybePut(topic, partitionId).lag = Math.max(0L, partitionData.highWatermark - newOffset)
                     // Once we hand off the partition data to the subclass, we can't mess with it any more in this thread
+                    //= 入队
                     processPartitionData(topicPartition, currentPartitionFetchState.fetchOffset, partitionData)
 
                     val validBytes = records.validBytes
@@ -438,7 +444,9 @@ case class PartitionFetchState(fetchOffset: Long, delay: DelayedItem, truncating
 
   def this(fetchOffset: Long) = this(fetchOffset, new DelayedItem(0))
 
-  def isReadyForFetch: Boolean = delay.getDelay(TimeUnit.MILLISECONDS) == 0 && !truncatingLog
+  def isReadyForFetch: Boolean =
+    delay.getDelay(TimeUnit.MILLISECONDS) == 0 && // 超过了过期时间
+      !truncatingLog
 
   def isTruncatingLog: Boolean = delay.getDelay(TimeUnit.MILLISECONDS) == 0 && truncatingLog
 

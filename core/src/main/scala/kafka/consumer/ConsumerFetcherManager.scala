@@ -1,49 +1,48 @@
 /**
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+  * Licensed to the Apache Software Foundation (ASF) under one or more
+  * contributor license agreements.  See the NOTICE file distributed with
+  * this work for additional information regarding copyright ownership.
+  * The ASF licenses this file to You under the Apache License, Version 2.0
+  * (the "License"); you may not use this file except in compliance with
+  * the License.  You may obtain a copy of the License at
+  *
+  * http://www.apache.org/licenses/LICENSE-2.0
+  *
+  * Unless required by applicable law or agreed to in writing, software
+  * distributed under the License is distributed on an "AS IS" BASIS,
+  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
 
 package kafka.consumer
 
-import kafka.server.{AbstractFetcherManager, AbstractFetcherThread, BrokerAndInitialOffset}
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
+
+import kafka.client.ClientUtils
 import kafka.cluster.{BrokerEndPoint, Cluster}
+import kafka.server.{AbstractFetcherManager, AbstractFetcherThread, BrokerAndInitialOffset}
+import kafka.utils.CoreUtils.inLock
+import kafka.utils.{ShutdownableThread, ZkUtils}
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.utils.Time
 
-import scala.collection.immutable
-import collection.mutable.HashMap
-import scala.collection.mutable
-import java.util.concurrent.locks.ReentrantLock
-
-import kafka.utils.CoreUtils.inLock
-import kafka.utils.ZkUtils
-import kafka.utils.ShutdownableThread
-import kafka.client.ClientUtils
-import java.util.concurrent.atomic.AtomicInteger
+import scala.collection.{immutable, mutable}
+import scala.collection.mutable.HashMap
 
 /**
- *  Usage:
- *  Once ConsumerFetcherManager is created, startConnections() and stopAllConnections() can be called repeatedly
- *  until shutdown() is called.
- */
+  * Usage:
+  * Once ConsumerFetcherManager is created, startConnections() and stopAllConnections() can be called repeatedly
+  * until shutdown() is called.
+  */
 @deprecated("This class has been deprecated and will be removed in a future release.", "0.11.0.0")
+//= -> ConsumerFetcherThread
 class ConsumerFetcherManager(private val consumerIdString: String,
                              private val config: ConsumerConfig,
-                             private val zkUtils : ZkUtils)
-        extends AbstractFetcherManager("ConsumerFetcherManager-%d".format(Time.SYSTEM.milliseconds),
-                                       config.clientId, config.numConsumerFetchers) {
+                             private val zkUtils: ZkUtils)
+  extends AbstractFetcherManager("ConsumerFetcherManager-%d".format(Time.SYSTEM.milliseconds),
+    config.clientId, config.numConsumerFetchers) {
   private var partitionMap: immutable.Map[TopicPartition, PartitionTopicInfo] = null
   private val noLeaderPartitionSet = new mutable.HashSet[TopicPartition]
   private val lock = new ReentrantLock
@@ -57,6 +56,7 @@ class ConsumerFetcherManager(private val consumerIdString: String,
       val leaderForPartitionsMap = new HashMap[TopicPartition, BrokerEndPoint]
       lock.lock()
       try {
+        //= noLeaderPartitionSet: 需要查找leader的partitions
         while (noLeaderPartitionSet.isEmpty) {
           trace("No partition for leader election.")
           cond.await()
@@ -64,17 +64,22 @@ class ConsumerFetcherManager(private val consumerIdString: String,
 
         trace("Partitions without leader %s".format(noLeaderPartitionSet))
         val brokers = ClientUtils.getPlaintextBrokerEndPoints(zkUtils)
-        val topicsMetadata = ClientUtils.fetchTopicMetadata(noLeaderPartitionSet.map(m => m.topic).toSet,
-                                                            brokers,
-                                                            config.clientId,
-                                                            config.socketTimeoutMs,
-                                                            correlationId.getAndIncrement).topicsMetadata
-        if(isDebugEnabled) topicsMetadata.foreach(topicMetadata => debug(topicMetadata.toString()))
+
+        //= TopicMetadata包含每个partition的leader对应哪个broker(BrokerEndPoint{id,host,port})
+        val topicsMetadata = ClientUtils.fetchTopicMetadata(
+          noLeaderPartitionSet.map(m => m.topic).toSet,
+          brokers,
+          config.clientId,
+          config.socketTimeoutMs,
+          correlationId.getAndIncrement
+        ).topicsMetadata
+        if (isDebugEnabled) topicsMetadata.foreach(topicMetadata => debug(topicMetadata.toString()))
+
         topicsMetadata.foreach { tmd =>
           val topic = tmd.topic
           tmd.partitionsMetadata.foreach { pmd =>
             val topicAndPartition = new TopicPartition(topic, pmd.partitionId)
-            if(pmd.leader.isDefined && noLeaderPartitionSet.contains(topicAndPartition)) {
+            if (pmd.leader.isDefined && noLeaderPartitionSet.contains(topicAndPartition)) {
               val leaderBroker = pmd.leader.get
               leaderForPartitionsMap.put(topicAndPartition, leaderBroker)
               noLeaderPartitionSet -= topicAndPartition
@@ -83,18 +88,21 @@ class ConsumerFetcherManager(private val consumerIdString: String,
         }
       } catch {
         case t: Throwable => {
-            if (!isRunning)
-              throw t /* If this thread is stopped, propagate this exception to kill the thread. */
-            else
-              warn("Failed to find leader for %s".format(noLeaderPartitionSet), t)
-          }
+          if (!isRunning)
+            throw t /* If this thread is stopped, propagate this exception to kill the thread. */
+          else
+            warn("Failed to find leader for %s".format(noLeaderPartitionSet), t)
+        }
       } finally {
         lock.unlock()
       }
 
+      //= 创建fetch线程
       try {
-        addFetcherForPartitions(leaderForPartitionsMap.map { case (topicPartition, broker) =>
-          topicPartition -> BrokerAndInitialOffset(broker, partitionMap(topicPartition).getFetchOffset())}
+        addFetcherForPartitions(
+          leaderForPartitionsMap.map { case (topicPartition, broker) =>
+            topicPartition -> BrokerAndInitialOffset(broker, partitionMap(topicPartition).getFetchOffset())
+          }
         )
       } catch {
         case t: Throwable =>
@@ -106,13 +114,14 @@ class ConsumerFetcherManager(private val consumerIdString: String,
             noLeaderPartitionSet ++= leaderForPartitionsMap.keySet
             lock.unlock()
           }
-        }
+      }
 
       shutdownIdleFetcherThreads()
       Thread.sleep(config.refreshLeaderBackoffMs)
     }
   }
 
+  //= 创建fetch线程
   override def createFetcherThread(fetcherId: Int, sourceBroker: BrokerEndPoint): AbstractFetcherThread = {
     new ConsumerFetcherThread(consumerIdString, fetcherId, config, sourceBroker, partitionMap, this)
   }
@@ -123,8 +132,9 @@ class ConsumerFetcherManager(private val consumerIdString: String,
 
     inLock(lock) {
       partitionMap = topicInfos.map(tpi => (new TopicPartition(tpi.topic, tpi.partitionId), tpi)).toMap
+
       noLeaderPartitionSet ++= topicInfos.map(tpi => new TopicPartition(tpi.topic, tpi.partitionId))
-      cond.signalAll()
+      cond.signalAll() //= signal $.leaderFinderThread
     }
   }
 

@@ -31,6 +31,7 @@ trait PartitionAssignor {
    * @return An assignment map of partition to this consumer group. This includes assignments for threads that belong
    *         to the same consumer group.
    */
+  //= @ref CMFLAG_assign_partition
   def assign(ctx: AssignmentContext): Pool[String, mutable.Map[TopicAndPartition, ConsumerThreadId]]
 
 }
@@ -45,6 +46,8 @@ object PartitionAssignor {
 }
 
 @deprecated("This class has been deprecated and will be removed in a future release.", "0.11.0.0")
+//= 只关注group相同的consumers
+//= 一个client可以有多个topic, 但group是相同的
 class AssignmentContext(group: String, val consumerId: String, excludeInternalTopics: Boolean, zkUtils: ZkUtils) {
   val myTopicThreadIds: collection.Map[String, collection.Set[ConsumerThreadId]] = {
     val myTopicCount = TopicCount.constructTopicCount(group, consumerId, zkUtils, excludeInternalTopics)
@@ -74,37 +77,37 @@ class RoundRobinAssignor() extends PartitionAssignor with Logging {
   def assign(ctx: AssignmentContext) = {
 
     val valueFactory = (_: String) => new mutable.HashMap[TopicAndPartition, ConsumerThreadId]
-    val partitionAssignment =
+    val partitionAssignment =  //= 返回值
       new Pool[String, mutable.Map[TopicAndPartition, ConsumerThreadId]](Some(valueFactory))
 
     if (ctx.consumersForTopic.nonEmpty) {
       // Collect consumer thread ids across all topics, remove duplicates, and sort to ensure determinism
-      val allThreadIds = ctx.consumersForTopic.flatMap { case (topic, threadIds) =>
-         threadIds
+      val allConsumerThreadIds = ctx.consumersForTopic.flatMap { case (topic, consumer_threadIds) =>
+         consumer_threadIds
       }.toSet.toSeq.sorted
 
-      val threadAssignor = CoreUtils.circularIterator(allThreadIds)
+      val consumerThreadIdAssignor = CoreUtils.circularIterator(allConsumerThreadIds)
 
       info("Starting round-robin assignment with consumers " + ctx.consumers)
       val allTopicPartitions = ctx.partitionsForTopic.flatMap { case (topic, partitions) =>
-        info("Consumer %s rebalancing the following partitions for topic %s: %s"
-          .format(ctx.consumerId, topic, partitions))
+        info("Consumer %s rebalancing the following partitions for topic %s: %s".format(ctx.consumerId, topic, partitions))
         partitions.map(partition => {
           TopicAndPartition(topic, partition)
         })
       }.toSeq.sortWith((topicPartition1, topicPartition2) => {
-        /*
-         * Randomize the order by taking the hashcode to reduce the likelihood of all partitions of a given topic ending
-         * up on one consumer (if it has a high enough stream count).
-         */
+        //= 用hashcode来比较大小，以此实现打乱list的元素顺序
         topicPartition1.toString.hashCode < topicPartition2.toString.hashCode
       })
 
       allTopicPartitions.foreach(topicPartition => {
-        val threadId = threadAssignor.dropWhile(threadId => !ctx.consumersForTopic(topicPartition.topic).contains(threadId)).next
-        // record the partition ownership decision
-        val assignmentForConsumer = partitionAssignment.getAndMaybePut(threadId.consumer)
-        assignmentForConsumer += (topicPartition -> threadId)
+        val currTopic = topicPartition.topic
+        //= 找到第1个currTopic下有的consumerThreadId
+        //= 把topicPartition分配给这个consumerThreadId
+        val consumerThreadId = consumerThreadIdAssignor.dropWhile(
+          consumer_threadId => !ctx.consumersForTopic(currTopic).contains(consumer_threadId)
+        ).next
+        val assignmentForConsumer = partitionAssignment.getAndMaybePut(consumerThreadId.consumer)
+        assignmentForConsumer += (topicPartition -> consumerThreadId)
       })
     }
 
@@ -128,9 +131,10 @@ class RoundRobinAssignor() extends PartitionAssignor with Logging {
 class RangeAssignor() extends PartitionAssignor with Logging {
 
   def assign(ctx: AssignmentContext) = {
-    val valueFactory = (_: String) => new mutable.HashMap[TopicAndPartition, ConsumerThreadId]
-    val partitionAssignment =
-      new Pool[String, mutable.Map[TopicAndPartition, ConsumerThreadId]](Some(valueFactory))
+    val valueFactory = (_/* topic */: String) => new mutable.HashMap[TopicAndPartition, ConsumerThreadId]
+    //= <consumerId, <topicPartition, consumerThreadId>>
+    val partitionAssignment = new Pool[String, mutable.Map[TopicAndPartition, ConsumerThreadId]](Some(valueFactory))
+
     for (topic <- ctx.myTopicThreadIds.keySet) {
       val curConsumers = ctx.consumersForTopic(topic)
       val curPartitions: Seq[Int] = ctx.partitionsForTopic(topic)
@@ -142,6 +146,7 @@ class RangeAssignor() extends PartitionAssignor with Logging {
         " for topic " + topic + " with consumers: " + curConsumers)
 
       for (consumerThreadId <- curConsumers) {
+        //= 分配逻辑
         val myConsumerPosition = curConsumers.indexOf(consumerThreadId)
         assert(myConsumerPosition >= 0)
         val startPart = nPartsPerConsumer * myConsumerPosition + myConsumerPosition.min(nConsumersWithExtraPart)
@@ -165,8 +170,9 @@ class RangeAssignor() extends PartitionAssignor with Logging {
       }
     }
 
-    // assign Map.empty for the consumers which are not associated with topic partitions
+    //= 保证每个consumerId都有一个Map(可能是empty)
     ctx.consumers.foreach(consumerId => partitionAssignment.getAndMaybePut(consumerId))
+
     partitionAssignment
   }
 }

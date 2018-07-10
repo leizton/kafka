@@ -120,7 +120,7 @@ abstract class AbstractFetcherManager(protected val name: String, clientId: Stri
       def addAndStartFetcherThread(brokerAndFetcherId: BrokerAndFetcherId, brokerIdAndFetcherId: BrokerIdAndFetcherId) {
         val fetcherThread = createFetcherThread(brokerAndFetcherId.fetcherId, brokerAndFetcherId.broker)
         fetcherThreadMap.put(brokerIdAndFetcherId, fetcherThread)
-        fetcherThread.start
+        fetcherThread.start()
       }
 
       for ((brokerAndFetcherId, initialFetchOffsets) <- partitionsPerFetcher) {

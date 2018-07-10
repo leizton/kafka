@@ -24,6 +24,7 @@ import kafka.message.MessageAndMetadata
 
 @deprecated("This class has been deprecated and will be removed in a future release. " +
             "Please use org.apache.kafka.streams.KafkaStreams instead.", "0.11.0.0")
+//= -> ConsumerIterator
 class KafkaStream[K,V](private val queue: BlockingQueue[FetchedDataChunk],
                         consumerTimeoutMs: Int,
                         private val keyDecoder: Decoder[K],
