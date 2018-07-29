@@ -161,6 +161,7 @@ object DelayedOperationPurgatory {
 /**
  * A helper purgatory class for bookkeeping delayed operations with a timeout, and expiring timed out operations.
  */
+//= 延迟操作净化器
 final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: String,
                                                              timeoutTimer: Timer,
                                                              brokerId: Int = 0,
@@ -170,6 +171,7 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
         extends Logging with KafkaMetricsGroup {
 
   /* a list of operation watching keys */
+  //= CMFLAG_register_watcher
   private val watchersForKey = new Pool[Any, Watchers](Some((key: Any) => new Watchers(key)))
 
   private val removeWatchersLock = new ReentrantReadWriteLock()
@@ -313,6 +315,7 @@ final class DelayedOperationPurgatory[T <: DelayedOperation](purgatoryName: Stri
    */
   private def watchForOperation(key: Any, operation: T) {
     inReadLock(removeWatchersLock) {
+      //= CMFLAG_register_watcher
       val watcher = watchersForKey.getAndMaybePut(key)
       watcher.watch(operation)
     }

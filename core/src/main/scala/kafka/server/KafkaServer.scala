@@ -202,7 +202,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         initZkClient(time)
 
         /* Get or create cluster_id */
-        _clusterId = getOrGenerateClusterId(zkClient)
+        _clusterId = getOrGenerateClusterId(zkClient)  //= '/cluster/id'
         info(s"Cluster ID = $clusterId")
 
         /* generate brokerId */
@@ -251,7 +251,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
         replicaManager.startup()
 
         val brokerInfo = createBrokerInfo
-        zkClient.registerBrokerInZk(brokerInfo)
+        zkClient.registerBrokerInZk(brokerInfo)  //= brokers/ids/$brokerId
 
         // Now that the broker id is successfully registered, checkpoint it
         checkpointBrokerId(config.brokerId)
@@ -292,8 +292,8 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
           kafkaController, zkClient, config.brokerId, config, metadataCache, metrics, authorizer, quotaManagers,
           fetchManager, brokerTopicStats, clusterId, time, tokenManager)
 
-        requestHandlerPool = new KafkaRequestHandlerPool(config.brokerId, socketServer.requestChannel, apis, time,
-          config.numIoThreads)
+        //= 业务线程池
+        requestHandlerPool = new KafkaRequestHandlerPool(config.brokerId, socketServer.requestChannel, apis, time, config.numIoThreads)
 
         Mx4jLoader.maybeLoad()
 
@@ -680,6 +680,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = Time.SYSTEM, threadNameP
     (brokerId, offlineDirs)
   }
 
+  //= 往"logDir/meta.properties"写brokerId
   private def checkpointBrokerId(brokerId: Int) {
     var logDirsWithoutMetaProps: List[String] = List()
 

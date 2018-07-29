@@ -175,8 +175,11 @@ class ReplicaManager(val config: KafkaConfig,
   /* epoch of the controller that last changed the leader */
   @volatile var controllerEpoch: Int = KafkaController.InitialControllerEpoch - 1
   private val localBrokerId = config.brokerId
-  private val allPartitions = new Pool[TopicPartition, Partition](valueFactory = Some(tp =>
-    new Partition(tp.topic, tp.partition, time, this)))
+
+  private val allPartitions = new Pool[TopicPartition, Partition] (
+    valueFactory = Some(tp => new Partition(tp.topic, tp.partition, time, this))
+  )
+
   private val replicaStateChangeLock = new Object
   val replicaFetcherManager = createReplicaFetcherManager(metrics, time, threadNamePrefix, quotaManagers.follower)
   val replicaAlterLogDirsManager = createReplicaAlterLogDirsManager(quotaManagers.alterLogDirs, brokerTopicStats)
@@ -456,42 +459,43 @@ class ReplicaManager(val config: KafkaConfig,
    * the callback function will be triggered either when timeout or the required acks are satisfied;
    * if the callback function itself is already synchronized on some object then pass this object to avoid deadlock.
    */
+  //= msg追加到分区的主副本，并等待其他副本的fetch
+  // ->{$.appendToLocalLog}
   def appendRecords(timeout: Long,
                     requiredAcks: Short,
                     internalTopicsAllowed: Boolean,
                     isFromClient: Boolean,
-                    entriesPerPartition: Map[TopicPartition, MemoryRecords],
+                    // messages
+                    partitionToMsgs: Map[TopicPartition, MemoryRecords],
+                    // response回调
                     responseCallback: Map[TopicPartition, PartitionResponse] => Unit,
+                    // 以下参数取默认值
                     delayedProduceLock: Option[Lock] = None,
                     processingStatsCallback: Map[TopicPartition, RecordsProcessingStats] => Unit = _ => ()) {
     if (isValidRequiredAcks(requiredAcks)) {
-      val sTime = time.milliseconds
-      val localProduceResults = appendToLocalLog(internalTopicsAllowed = internalTopicsAllowed,
-        isFromClient = isFromClient, entriesPerPartition, requiredAcks)
-      debug("Produce to local log in %d ms".format(time.milliseconds - sTime))
+      val startTime = time.milliseconds
+      //= append到当前broker的log
+      val localProduceResults = appendToLocalLog(internalTopicsAllowed = internalTopicsAllowed, isFromClient, partitionToMsgs, requiredAcks)
 
       val produceStatus = localProduceResults.map { case (topicPartition, result) =>
-        topicPartition ->
-                ProducePartitionStatus(
-                  result.info.lastOffset + 1, // required offset
-                  new PartitionResponse(result.error, result.info.firstOffset, result.info.logAppendTime, result.info.logStartOffset)) // response status
+        topicPartition -> ProducePartitionStatus(
+          result.info.lastOffset + 1, // required offset
+          new PartitionResponse(result.error, result.info.firstOffset, result.info.logAppendTime, result.info.logStartOffset)) // response status
       }
 
       processingStatsCallback(localProduceResults.mapValues(_.info.recordsProcessingStats))
 
-      if (delayedProduceRequestRequired(requiredAcks, entriesPerPartition, localProduceResults)) {
-        // create delayed produce operation
+      if (delayedProduceRequestRequired(requiredAcks, partitionToMsgs, localProduceResults)) { // localProduceResults里至少有一个topicPartition写成功
         val produceMetadata = ProduceMetadata(requiredAcks, produceStatus)
+
+        //= DelayedProduce
         val delayedProduce = new DelayedProduce(timeout, produceMetadata, this, responseCallback, delayedProduceLock)
 
-        // create a list of (topic, partition) pairs to use as keys for this delayed produce operation
-        val producerRequestKeys = entriesPerPartition.keys.map(new TopicPartitionOperationKey(_)).toSeq
+        //= (topic, partition)集合
+        val producerRequestKeys = partitionToMsgs.keys.map(new TopicPartitionOperationKey(_)).toSeq
 
         // try to complete the request immediately, otherwise put it into the purgatory
-        // this is because while the delayed produce operation is being created, new
-        // requests may arrive and hence make this operation completable.
         delayedProducePurgatory.tryCompleteElseWatch(delayedProduce, producerRequestKeys)
-
       } else {
         // we can respond immediately
         val produceResponseStatus = produceStatus.mapValues(status => status.responseStatus)
@@ -500,9 +504,11 @@ class ReplicaManager(val config: KafkaConfig,
     } else {
       // If required.acks is outside accepted range, something is wrong with the client
       // Just return an error and don't handle the request at all
-      val responseStatus = entriesPerPartition.map { case (topicPartition, _) =>
-        topicPartition -> new PartitionResponse(Errors.INVALID_REQUIRED_ACKS,
-          LogAppendInfo.UnknownLogAppendInfo.firstOffset, RecordBatch.NO_TIMESTAMP, LogAppendInfo.UnknownLogAppendInfo.logStartOffset)
+      val responseStatus = partitionToMsgs.map {
+        case (topicPartition, _) =>
+          topicPartition -> new PartitionResponse(
+            Errors.INVALID_REQUIRED_ACKS, LogAppendInfo.UnknownLogAppendInfo.firstOffset,
+            RecordBatch.NO_TIMESTAMP, LogAppendInfo.UnknownLogAppendInfo.logStartOffset)
       }
       responseCallback(responseStatus)
     }
@@ -706,11 +712,12 @@ class ReplicaManager(val config: KafkaConfig,
   // 2. there is data to append
   // 3. at least one partition append was successful (fewer errors than partitions)
   private def delayedProduceRequestRequired(requiredAcks: Short,
-                                            entriesPerPartition: Map[TopicPartition, MemoryRecords],
+                                            partitionToMsgs: Map[TopicPartition, MemoryRecords],
                                             localProduceResults: Map[TopicPartition, LogAppendResult]): Boolean = {
     requiredAcks == -1 &&
-    entriesPerPartition.nonEmpty &&
-    localProduceResults.values.count(_.exception.isDefined) < entriesPerPartition.size
+    partitionToMsgs.nonEmpty &&
+    // 至少有一个partition写成功了
+    localProduceResults.values.count(_.exception.isDefined) < partitionToMsgs.size
   }
 
   private def isValidRequiredAcks(requiredAcks: Short): Boolean = {
@@ -720,71 +727,73 @@ class ReplicaManager(val config: KafkaConfig,
   /**
    * Append the messages to the local replica logs
    */
+  //= ->{Partition::appendRecordsToLeader}
   private def appendToLocalLog(internalTopicsAllowed: Boolean,
                                isFromClient: Boolean,
                                entriesPerPartition: Map[TopicPartition, MemoryRecords],
                                requiredAcks: Short): Map[TopicPartition, LogAppendResult] = {
     trace(s"Append [$entriesPerPartition] to local log")
     entriesPerPartition.map { case (topicPartition, records) =>
+      // monitor
       brokerTopicStats.topicStats(topicPartition.topic).totalProduceRequestRate.mark()
       brokerTopicStats.allTopicsStats.totalProduceRequestRate.mark()
 
-      // reject appending to internal topics if it is not allowed
+      // reject if not allowed
       if (Topic.isInternal(topicPartition.topic) && !internalTopicsAllowed) {
-        (topicPartition, LogAppendResult(
-          LogAppendInfo.UnknownLogAppendInfo,
-          Some(new InvalidTopicException(s"Cannot append to internal topic ${topicPartition.topic}"))))
-      } else {
-        try {
-          val partitionOpt = getPartition(topicPartition)
-          val info = partitionOpt match {
-            case Some(partition) =>
-              if (partition eq ReplicaManager.OfflinePartition)
-                throw new KafkaStorageException(s"Partition $topicPartition is in an offline log directory on broker $localBrokerId")
-              partition.appendRecordsToLeader(records, isFromClient, requiredAcks)
+        (
+          topicPartition,
+          LogAppendResult(
+            LogAppendInfo.UnknownLogAppendInfo,
+            Some(new InvalidTopicException(s"Cannot append to internal topic ${topicPartition.topic}")))
+        )
+      }
 
-            case None => throw new UnknownTopicOrPartitionException("Partition %s doesn't exist on %d"
-              .format(topicPartition, localBrokerId))
-          }
-
-          val numAppendedMessages =
-            if (info.firstOffset == -1L || info.lastOffset == -1L)
-              0
-            else
-              info.lastOffset - info.firstOffset + 1
-
-          // update stats for successfully appended bytes and messages as bytesInRate and messageInRate
-          brokerTopicStats.topicStats(topicPartition.topic).bytesInRate.mark(records.sizeInBytes)
-          brokerTopicStats.allTopicsStats.bytesInRate.mark(records.sizeInBytes)
-          brokerTopicStats.topicStats(topicPartition.topic).messagesInRate.mark(numAppendedMessages)
-          brokerTopicStats.allTopicsStats.messagesInRate.mark(numAppendedMessages)
-
-          trace("%d bytes written to log %s-%d beginning at offset %d and ending at offset %d"
-            .format(records.sizeInBytes, topicPartition.topic, topicPartition.partition, info.firstOffset, info.lastOffset))
-          (topicPartition, LogAppendResult(info))
-        } catch {
-          // NOTE: Failed produce requests metric is not incremented for known exceptions
-          // it is supposed to indicate un-expected failures of a broker in handling a produce request
-          case e@ (_: UnknownTopicOrPartitionException |
-                   _: NotLeaderForPartitionException |
-                   _: RecordTooLargeException |
-                   _: RecordBatchTooLargeException |
-                   _: CorruptRecordException |
-                   _: KafkaStorageException |
-                   _: InvalidTimestampException) =>
-            (topicPartition, LogAppendResult(LogAppendInfo.UnknownLogAppendInfo, Some(e)))
-          case t: Throwable =>
-            val logStartOffset = getPartition(topicPartition) match {
-              case Some(partition) =>
-                partition.logStartOffset
-              case _ =>
-                -1
-            }
-            brokerTopicStats.topicStats(topicPartition.topic).failedProduceRequestRate.mark()
-            brokerTopicStats.allTopicsStats.failedProduceRequestRate.mark()
-            error("Error processing append operation on partition %s".format(topicPartition), t)
-            (topicPartition, LogAppendResult(LogAppendInfo.unknownLogAppendInfoWithLogStartOffset(logStartOffset), Some(t)))
+      try {
+        val partitionOpt = getPartition(topicPartition)
+        val info = partitionOpt match {
+          case Some(partition) =>
+            if (partition eq ReplicaManager.OfflinePartition)
+              throw new KafkaStorageException(s"Partition $topicPartition is in an offline log directory on broker $localBrokerId")
+            //= msg写leader
+            partition.appendRecordsToLeader(records, isFromClient, requiredAcks)
+          case None =>
+            throw new UnknownTopicOrPartitionException("Partition %s doesn't exist on %d".format(topicPartition, localBrokerId))
         }
+
+        // monitor
+        val numAppendedMessages =  // append成功的msgNum
+          if (info.firstOffset == -1L || info.lastOffset == -1L) 0
+          else info.lastOffset - info.firstOffset + 1
+        brokerTopicStats.topicStats(topicPartition.topic).bytesInRate.mark(records.sizeInBytes)
+        brokerTopicStats.allTopicsStats.bytesInRate.mark(records.sizeInBytes)
+        brokerTopicStats.topicStats(topicPartition.topic).messagesInRate.mark(numAppendedMessages)
+        brokerTopicStats.allTopicsStats.messagesInRate.mark(numAppendedMessages)
+
+        trace("%d bytes written to log %s-%d beginning at offset %d and ending at offset %d"
+          .format(records.sizeInBytes, topicPartition.topic, topicPartition.partition, info.firstOffset, info.lastOffset))
+        (topicPartition, LogAppendResult(info))
+      } catch {
+        // NOTE: Failed produce requests metric is not incremented for known exceptions
+        // it is supposed to indicate un-expected failures of a broker in handling a produce request
+        case e@ (_: UnknownTopicOrPartitionException |
+                 _: NotLeaderForPartitionException |
+                 _: RecordTooLargeException |
+                 _: RecordBatchTooLargeException |
+                 _: CorruptRecordException |
+                 _: KafkaStorageException |
+                 _: InvalidTimestampException) =>
+          (topicPartition, LogAppendResult(LogAppendInfo.UnknownLogAppendInfo, Some(e)))
+        case t: Throwable =>
+          val logStartOffset = getPartition(topicPartition) match {
+            case Some(partition) =>
+              partition.logStartOffset
+            case _ =>
+              -1
+          }
+          brokerTopicStats.topicStats(topicPartition.topic).failedProduceRequestRate.mark()
+          brokerTopicStats.allTopicsStats.failedProduceRequestRate.mark()
+          error("Error processing append operation on partition %s".format(topicPartition), t)
+          (topicPartition, LogAppendResult(LogAppendInfo.unknownLogAppendInfoWithLogStartOffset(logStartOffset), Some(t)))
       }
     }
   }
@@ -834,8 +843,8 @@ class ReplicaManager(val config: KafkaConfig,
     //                        4) some error happens while reading data
     if (timeout <= 0 || fetchInfos.isEmpty || bytesReadable >= fetchMinBytes || errorReadingData) {
       val fetchPartitionData = logReadResults.map { case (tp, result) =>
-        tp -> FetchPartitionData(result.error, result.highWatermark, result.leaderLogStartOffset, result.info.records,
-          result.lastStableOffset, result.info.abortedTransactions)
+        tp -> FetchPartitionData(result.error, result.highWatermark, result.leaderLogStartOffset,
+          result.info.records, result.lastStableOffset, result.info.abortedTransactions)
       }
       responseCallback(fetchPartitionData)
     } else {

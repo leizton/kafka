@@ -24,7 +24,7 @@ import org.apache.kafka.common.header.Header;
  * A log record is a tuple consisting of a unique offset in the log, a sequence number assigned by
  * the producer, a timestamp, a key and a value.
  */
-public interface Record {
+public interface Record {  //= 一条msg
 
     Header[] EMPTY_HEADERS = new Header[0];
 
@@ -86,7 +86,7 @@ public interface Record {
      * Get the record's key.
      * @return the key or null if there is none
      */
-    ByteBuffer key();
+    ByteBuffer key();  //= key data
 
     /**
      * Get the size in bytes of the value.
@@ -104,7 +104,7 @@ public interface Record {
      * Get the record's value
      * @return the (nullable) value
      */
-    ByteBuffer value();
+    ByteBuffer value();  //= value data
 
     /**
      * Check whether the record has a particular magic. For versions prior to 2, the record contains its own magic,

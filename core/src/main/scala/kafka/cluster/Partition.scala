@@ -181,12 +181,15 @@ class Partition(val topic: String,
           info(s"No checkpointed highwatermark is found for partition $topicPartition")
         val offset = math.min(offsetMap.getOrElse(topicPartition, 0L), log.logEndOffset)
         new Replica(replicaId, topicPartition, time, offset, Some(log))
-      } else new Replica(replicaId, topicPartition, time)
+      } else {
+        new Replica(replicaId, topicPartition, time)
+      }
     })
   }
 
   def getReplica(replicaId: Int = localBrokerId): Option[Replica] = Option(allReplicasMap.get(replicaId))
 
+  //= 返回$.allReplicasMap里replicaId是$.localBrokerId的leaderReplica
   def leaderReplicaIfLocal: Option[Replica] =
     leaderReplicaIdOpt.filter(_ == localBrokerId).flatMap(getReplica)
 
@@ -561,23 +564,28 @@ class Partition(val topic: String,
     }
   }
 
+  //= ->{Replica.log}
+  //= ->{ReplicaManager::tryCompleteDelayedFetch}, 等待其他副本fetch
   def appendRecordsToLeader(records: MemoryRecords, isFromClient: Boolean, requiredAcks: Int = 0): LogAppendInfo = {
     val (info, leaderHWIncremented) = inReadLock(leaderIsrUpdateLock) {
       leaderReplicaIfLocal match {
-        case Some(leaderReplica) =>
+        case Some(leaderReplica) =>  //= 拿到leader副本
           val log = leaderReplica.log.get
+
+          // 避免在同步慢的broker上继续写
           val minIsr = log.config.minInSyncReplicas
           val inSyncSize = inSyncReplicas.size
-
-          // Avoid writing to leader if there are not enough insync replicas to make it safe
           if (inSyncSize < minIsr && requiredAcks == -1) {
             throw new NotEnoughReplicasException("Number of insync replicas for partition %s is [%d], below required minimum [%d]"
               .format(topicPartition, inSyncSize, minIsr))
           }
 
+          // 写入log
           val info = log.appendAsLeader(records, leaderEpoch = this.leaderEpoch, isFromClient)
+
           // probably unblock some follower fetch requests since log end offset has been updated
           replicaManager.tryCompleteDelayedFetch(TopicPartitionOperationKey(this.topic, this.partitionId))
+
           // we may need to increment high watermark since ISR could be down to 1
           (info, maybeIncrementLeaderHW(leaderReplica))
 

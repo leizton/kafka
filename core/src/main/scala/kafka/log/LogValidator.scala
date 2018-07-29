@@ -47,10 +47,8 @@ private[kafka] object LogValidator extends Logging {
    */
   private[kafka] def validateMessagesAndAssignOffsets(records: MemoryRecords,
                                                       offsetCounter: LongRef,
-                                                      time: Time,
-                                                      now: Long,
-                                                      sourceCodec: CompressionCodec,
-                                                      targetCodec: CompressionCodec,
+                                                      time: Time, now: Long,
+                                                      sourceCodec: CompressionCodec, targetCodec: CompressionCodec,
                                                       compactedTopic: Boolean,
                                                       magic: Byte,
                                                       timestampType: TimestampType,
@@ -131,8 +129,7 @@ private[kafka] object LogValidator extends Logging {
                                                    partitionLeaderEpoch: Int,
                                                    isFromClient: Boolean): ValidationAndOffsetAssignResult = {
     val startNanos = time.nanoseconds
-    val sizeInBytesAfterConversion = AbstractRecords.estimateSizeInBytes(toMagicValue, offsetCounter.value,
-      CompressionType.NONE, records.records)
+    val sizeInBytesAfterConversion = AbstractRecords.estimateSizeInBytes(toMagicValue, offsetCounter.value, CompressionType.NONE, records.records)
 
     val (producerId, producerEpoch, sequence, isTransactional) = {
       val first = records.batches.asScala.head

@@ -371,6 +371,7 @@ class KafkaApis(val requestChannel: RequestChannel,
   /**
    * Handle a produce request
    */
+  //= ->{ReplicaManager::appendRecords}
   def handleProduceRequest(request: RequestChannel.Request) {
     val produceRequest = request.body[ProduceRequest]
     val numBytesAppended = request.header.toStruct.sizeOf + request.sizeOfBodyInBytes
@@ -381,14 +382,15 @@ class KafkaApis(val requestChannel: RequestChannel,
         return
       }
       // Note that authorization to a transactionalId implies ProducerId authorization
-
-    } else if (produceRequest.isIdempotent && !authorize(request.session, IdempotentWrite, Resource.ClusterResource)) {
+    } else if (produceRequest.isIdempotent /* 幂等 */ && !authorize(request.session, IdempotentWrite, Resource.ClusterResource)) {
       sendErrorResponseMaybeThrottle(request, Errors.CLUSTER_AUTHORIZATION_FAILED.exception)
       return
     }
 
     val unauthorizedTopicResponses = mutable.Map[TopicPartition, PartitionResponse]()
     val nonExistingTopicResponses = mutable.Map[TopicPartition, PartitionResponse]()
+
+    //= 会被保存的messages
     val authorizedRequestInfo = mutable.Map[TopicPartition, MemoryRecords]()
 
     for ((topicPartition, memoryRecords) <- produceRequest.partitionRecordsOrFail.asScala) {
@@ -400,7 +402,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         authorizedRequestInfo += (topicPartition -> memoryRecords)
     }
 
-    // the callback for sending a produce response
+    // 向client发response
     def sendResponseCallback(responseStatus: Map[TopicPartition, PartitionResponse]) {
 
       val mergedResponseStatus = responseStatus ++ unauthorizedTopicResponses ++ nonExistingTopicResponses
@@ -436,8 +438,10 @@ class KafkaApis(val requestChannel: RequestChannel,
             sendNoOpResponseExemptThrottle(request)
           }
         } else {
-          sendResponseMaybeThrottle(request, requestThrottleMs =>
-            new ProduceResponse(mergedResponseStatus.asJava, bandwidthThrottleTimeMs + requestThrottleMs))
+          //= 发生response
+          val responseCreator = (requestThrottleMs: Int) =>
+            new ProduceResponse(mergedResponseStatus.asJava, bandwidthThrottleTimeMs + requestThrottleMs)
+          sendResponseMaybeThrottle(request, responseCreator)
         }
       }
 
@@ -451,31 +455,34 @@ class KafkaApis(val requestChannel: RequestChannel,
         produceResponseCallback)
     }
 
+    // 记录处理状态
     def processingStatsCallback(processingStats: Map[TopicPartition, RecordsProcessingStats]): Unit = {
       processingStats.foreach { case (tp, info) =>
         updateRecordsProcessingStats(request, tp, info)
       }
     }
 
-    if (authorizedRequestInfo.isEmpty)
+    if (authorizedRequestInfo.isEmpty) {
       sendResponseCallback(Map.empty)
-    else {
-      val internalTopicsAllowed = request.header.clientId == AdminUtils.AdminClientId
-
-      // call the replica manager to append messages to the replicas
-      replicaManager.appendRecords(
-        timeout = produceRequest.timeout.toLong,
-        requiredAcks = produceRequest.acks,
-        internalTopicsAllowed = internalTopicsAllowed,
-        isFromClient = true,
-        entriesPerPartition = authorizedRequestInfo,
-        responseCallback = sendResponseCallback,
-        processingStatsCallback = processingStatsCallback)
-
-      // if the request is put into the purgatory, it will have a held reference and hence cannot be garbage collected;
-      // hence we clear its data here in order to let GC reclaim its memory since it is already appended to log
-      produceRequest.clearPartitionRecords()
+      return
     }
+
+    val internalTopicsAllowed = request.header.clientId == AdminUtils.AdminClientId
+
+    // 把msg加到replica里
+    replicaManager.appendRecords(
+      timeout = produceRequest.timeout.toLong,
+      requiredAcks = produceRequest.acks,
+      internalTopicsAllowed = internalTopicsAllowed,
+      isFromClient = true,
+      partitionToMsgs = authorizedRequestInfo,
+      responseCallback = sendResponseCallback,
+      processingStatsCallback = processingStatsCallback
+    )
+
+    // if the request is put into the purgatory, it will have a held reference and hence cannot be garbage collected;
+    // hence we clear its data here in order to let GC reclaim its memory since it is already appended to log
+    produceRequest.clearPartitionRecords()
   }
 
   /**
@@ -1680,7 +1687,7 @@ class KafkaApis(val requestChannel: RequestChannel,
           requiredAcks = -1,
           internalTopicsAllowed = true,
           isFromClient = false,
-          entriesPerPartition = controlRecords,
+          partitionToMsgs = controlRecords,
           responseCallback = maybeSendResponseCallback(producerId, marker.transactionResult))
       }
     }
@@ -2218,7 +2225,10 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   private def sendResponseMaybeThrottle(request: RequestChannel.Request, createResponse: Int => AbstractResponse): Unit = {
     quotas.request.maybeRecordAndThrottle(request,
-      throttleTimeMs => sendResponse(request, Some(createResponse(throttleTimeMs))))
+      throttleTimeMs => {
+        val response = createResponse(throttleTimeMs)
+        sendResponse(request, Some(response))
+      })
   }
 
   private def sendErrorResponseMaybeThrottle(request: RequestChannel.Request, error: Throwable) {
@@ -2256,6 +2266,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     requestChannel.sendResponse(new RequestChannel.Response(request, None, CloseConnectionAction, None))
   }
 
+  //= ->{RequestChannel::sendResponse}
   private def sendResponse(request: RequestChannel.Request, responseOpt: Option[AbstractResponse]): Unit = {
     // Update error metrics for each error code in the response including Errors.NONE
     responseOpt.foreach(response => requestChannel.updateErrorMetrics(request.header.apiKey, response.errorCounts.asScala))

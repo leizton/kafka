@@ -183,6 +183,7 @@ class Log(@volatile var dir: File,
       throw new KafkaStorageException(s"The memory mapped buffer for log of $topicPartition is already closed")
   }
 
+  // $.updateLogEndOffset()里更新下一条
   @volatile private var nextOffsetMetadata: LogOffsetMetadata = _
 
   /* The earliest offset which is part of an incomplete transaction. This is used to compute the
@@ -639,48 +640,43 @@ class Log(@volatile var dir: File,
   private def append(records: MemoryRecords, isFromClient: Boolean, assignOffsets: Boolean, leaderEpoch: Int): LogAppendInfo = {
     maybeHandleIOException(s"Error while appending records to $topicPartition in dir ${dir.getParent}") {
       val appendInfo = analyzeAndValidateRecords(records, isFromClient = isFromClient)
-
-      // return if we have no valid messages or if this is a duplicate of the last appended entry
-      if (appendInfo.shallowCount == 0)
+      if (appendInfo.shallowCount == 0) {  // no valid messages
         return appendInfo
+      }
+      var validRecords = trimInvalidBytes(records, appendInfo)  // trim掉appendInfo.validBytes外的部分, appendInfo.validBytes内经过crc校验
 
-      // trim any invalid bytes or partial messages before appending it to the on-disk log
-      var validRecords = trimInvalidBytes(records, appendInfo)
-
-      // they are valid, insert them in the log
       lock synchronized {
         checkIfMemoryMappedBufferClosed()
-        if (assignOffsets) {
-          // assign offsets to the message set
+        if (assignOffsets) {  // 当前log是leader
           val offset = new LongRef(nextOffsetMetadata.messageOffset)
-          appendInfo.firstOffset = offset.value
+          appendInfo.firstOffset = offset.value  // begin_offset
           val now = time.milliseconds
+
+          // assign offset
           val validateAndOffsetAssignResult = try {
-            LogValidator.validateMessagesAndAssignOffsets(validRecords,
+            LogValidator.validateMessagesAndAssignOffsets(
+              validRecords,
               offset,
-              time,
-              now,
-              appendInfo.sourceCodec,
-              appendInfo.targetCodec,
+              time, now,
+              appendInfo.sourceCodec, appendInfo.targetCodec,
               config.compact,
               config.messageFormatVersion.messageFormatVersion.value,
               config.messageTimestampType,
               config.messageTimestampDifferenceMaxMs,
               leaderEpoch,
-              isFromClient)
+              isFromClient
+            )
           } catch {
             case e: IOException => throw new KafkaException("Error in validating messages while appending to log '%s'".format(name), e)
           }
-          validRecords = validateAndOffsetAssignResult.validatedRecords
           appendInfo.maxTimestamp = validateAndOffsetAssignResult.maxTimestamp
           appendInfo.offsetOfMaxTimestamp = validateAndOffsetAssignResult.shallowOffsetOfMaxTimestamp
-          appendInfo.lastOffset = offset.value - 1
+          appendInfo.lastOffset = offset.value - 1  // last_offset
           appendInfo.recordsProcessingStats = validateAndOffsetAssignResult.recordsProcessingStats
-          if (config.messageTimestampType == TimestampType.LOG_APPEND_TIME)
-            appendInfo.logAppendTime = now
+          if (config.messageTimestampType == TimestampType.LOG_APPEND_TIME) appendInfo.logAppendTime = now
+          validRecords = validateAndOffsetAssignResult.validatedRecords
 
-          // re-validate message sizes if there's a possibility that they have changed (due to re-compression or message
-          // format conversion)
+          // re-validate message sizes
           if (validateAndOffsetAssignResult.messageSizeMaybeChanged) {
             for (batch <- validRecords.batches.asScala) {
               if (batch.sizeInBytes > config.maxMessageSize) {
@@ -693,8 +689,7 @@ class Log(@volatile var dir: File,
               }
             }
           }
-        } else {
-          // we are taking the offsets we are given
+        } else {  // 当前log是follower
           if (!appendInfo.offsetsMonotonic || appendInfo.firstOffset < nextOffsetMetadata.messageOffset)
             throw new IllegalArgumentException("Out of order offsets found in " + records.records.asScala.map(_.offset))
         }

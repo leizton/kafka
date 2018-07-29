@@ -92,6 +92,7 @@ class KafkaRequestHandler(id: Int,
 
 }
 
+//= $.runnables的每个handler在requestChannel上poll获取req, 再调用apis.handle(req)
 class KafkaRequestHandlerPool(val brokerId: Int,
                               val requestChannel: RequestChannel,
                               val apis: KafkaApis,

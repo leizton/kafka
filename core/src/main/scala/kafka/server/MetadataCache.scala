@@ -40,6 +40,7 @@ import org.apache.kafka.common.requests.{MetadataResponse, UpdateMetadataRequest
 class MetadataCache(brokerId: Int) extends Logging {
 
   private val cache = mutable.Map[String, mutable.Map[Int, UpdateMetadataRequest.PartitionState]]()
+
   @volatile private var controllerId: Option[Int] = None
   private val aliveBrokers = mutable.Map[Int, Broker]()
   private val aliveNodes = mutable.Map[Int, collection.Map[ListenerName, Node]]()

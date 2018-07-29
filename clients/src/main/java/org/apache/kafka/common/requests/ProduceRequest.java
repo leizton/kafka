@@ -58,12 +58,15 @@ public class ProduceRequest extends AbstractRequest {
     // partition level field names
     private static final String RECORD_SET_KEY_NAME = "record_set";
 
-
     private static final Schema TOPIC_PRODUCE_DATA_V0 = new Schema(
             TOPIC_NAME,
-            new Field(PARTITION_DATA_KEY_NAME, new ArrayOf(new Schema(
-                    PARTITION_ID,
-                    new Field(RECORD_SET_KEY_NAME, RECORDS)))));
+            new Field(
+                    PARTITION_DATA_KEY_NAME,
+                    new ArrayOf(new Schema(
+                        PARTITION_ID,
+                        new Field(RECORD_SET_KEY_NAME, RECORDS)
+                    ))
+            ));
 
     private static final Schema PRODUCE_REQUEST_V0 = new Schema(
             new Field(ACKS_KEY_NAME, INT16, "The number of acknowledgments the producer requires the leader to have " +

@@ -120,7 +120,7 @@ class ReplicaManagerTest {
         requiredAcks = 3,
         internalTopicsAllowed = false,
         isFromClient = true,
-        entriesPerPartition = Map(new TopicPartition("test1", 0) -> MemoryRecords.withRecords(CompressionType.NONE,
+        partitionToMsgs = Map(new TopicPartition("test1", 0) -> MemoryRecords.withRecords(CompressionType.NONE,
           new SimpleRecord("first message".getBytes))),
         responseCallback = callback)
     } finally {
@@ -543,7 +543,7 @@ class ReplicaManagerTest {
       requiredAcks = -1,
       internalTopicsAllowed = false,
       isFromClient = isFromClient,
-      entriesPerPartition = Map(partition -> records),
+      partitionToMsgs = Map(partition -> records),
       responseCallback = appendCallback)
 
     result

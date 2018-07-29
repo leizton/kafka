@@ -51,6 +51,7 @@ public class RequestContext {
         this.securityProtocol = securityProtocol;
     }
 
+    //= -> ApiKeys::parseRequest()
     public RequestAndSize parseRequest(ByteBuffer buffer) {
         if (isUnsupportedApiVersionsRequest()) {
             // Unsupported ApiVersion requests are treated as v0 requests and are not parsed

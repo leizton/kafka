@@ -40,6 +40,7 @@ import org.apache.kafka.server.policy.CreateTopicPolicy.RequestMetadata
 import scala.collection._
 import scala.collection.JavaConverters._
 
+//= 管理topic和partition的create/delete
 class AdminManager(val config: KafkaConfig,
                    val metrics: Metrics,
                    val metadataCache: MetadataCache,

@@ -121,15 +121,14 @@ public class KafkaChannel {
         return transportLayer.selectionKey();
     }
 
-    /**
-     * externally muting a channel should be done via selector to ensure proper state handling
-     */
+    //= 取消读监听
     void mute() {
         if (!disconnected)
             transportLayer.removeInterestOps(SelectionKey.OP_READ);
         muted = true;
     }
 
+    //= 恢复读监听
     void unmute() {
         if (!disconnected)
             transportLayer.addInterestOps(SelectionKey.OP_READ);

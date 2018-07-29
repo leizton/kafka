@@ -67,11 +67,13 @@ public abstract class AbstractIterator<T> implements Iterator<T> {
         return next;
     }
 
+    // 子类调用allDone()表示迭代结束
     protected T allDone() {
         state = State.DONE;
         return null;
     }
 
+    // 留给子类的接口
     protected abstract T makeNext();
 
     private Boolean maybeComputeNext() {

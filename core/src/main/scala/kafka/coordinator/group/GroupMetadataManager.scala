@@ -287,7 +287,7 @@ class GroupMetadataManager(brokerId: Int,
       requiredAcks = config.offsetCommitRequiredAcks,
       internalTopicsAllowed = true,
       isFromClient = false,
-      entriesPerPartition = records,
+      partitionToMsgs = records,
       delayedProduceLock = Some(group.lock),
       responseCallback = callback)
   }

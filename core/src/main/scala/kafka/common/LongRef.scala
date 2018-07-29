@@ -23,6 +23,7 @@ package kafka.common
   *
   * Unlike `AtomicLong`, this class is not thread-safe and there are no atomicity guarantees.
   */
+// wrap long
 class LongRef(var value: Long) {
 
   def addAndGet(delta: Long): Long = {

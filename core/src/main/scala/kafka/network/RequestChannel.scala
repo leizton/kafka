@@ -68,6 +68,7 @@ object RequestChannel extends Logging {
     }
   }
 
+  //= SocketServer::processCompletedReceives()里创建Request实例
   class Request(val processor: Int,
                 val context: RequestContext,
                 val startTimeNanos: Long,
@@ -86,6 +87,8 @@ object RequestChannel extends Logging {
     @volatile var recordNetworkThreadTimeCallback: Option[Long => Unit] = None
 
     val session = Session(context.principal, context.clientAddress)
+
+    //= 从buffer解析出AbstractRequest
     private val bodyAndSize: RequestAndSize = context.parseRequest(buffer)
 
     def header: RequestHeader = context.header
@@ -100,6 +103,7 @@ object RequestChannel extends Logging {
 
     def requestDesc(details: Boolean): String = s"$header -- ${body[AbstractRequest].toString(details)}"
 
+    //= 把AbstractRequest转成类型T返回
     def body[T <: AbstractRequest](implicit classTag: ClassTag[T], nn: NotNothing[T]): T = {
       bodyAndSize.request match {
         case r: T => r
@@ -282,6 +286,7 @@ class RequestChannel(val queueSize: Int) extends KafkaMetricsGroup {
   }
 
   /** Send a response back to the socket server to be sent over the network */
+  //= {KafkaApis::sendResponse}<-
   def sendResponse(response: RequestChannel.Response) {
     if (isTraceEnabled) {
       val requestHeader = response.request.header
